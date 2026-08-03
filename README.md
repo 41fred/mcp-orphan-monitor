@@ -18,14 +18,31 @@ This is a [known Claude Code issue](https://github.com/anthropics/claude-code/is
 
 ## How it works
 
-A 50-line bash script that runs every 10 minutes via macOS LaunchAgent:
+A small bash script that runs every 10 minutes via macOS LaunchAgent. It finds all
+node processes matching `mcp-server-*` or `mcp-remote`, then kills any that match **any**
+of these three signatures:
 
-1. Finds all node processes matching `mcp-server-*` or `mcp-remote`
-2. Checks if the parent process is still alive
-3. If the parent is gone (PPID=1, reparented to launchd), it's an orphan
-4. Kills orphans and logs what it did
+1. **Direct orphan** — the parent is PID 1 (reparented to launchd/init). The classic
+   crash case: the session process vanished.
+2. **Wedged / spinning** — the server is pinning CPU above `MCP_CPU_THRESHOLD` (default
+   60%). A healthy MCP server sits near 0% when idle, so sustained high CPU means it's
+   stuck in a spin loop — the signature that cooks a laptop 24/7.
+3. **Second-level orphan** — the parent is an AI-tool session (`claude`/`cursor`/…) that
+   is *itself* orphaned (that parent's PPID is 1). This catches abandoned-but-still-alive
+   sessions that linger for days holding their MCP children — the case PPID==1 detection
+   alone misses.
+
+Live sessions are safe: an active session's parent chain terminates at your shell or IDE,
+not at launchd, and a healthy idle MCP server stays well under the CPU threshold.
 
 No dependencies. No background daemon. Just a periodic scan.
+
+### Tuning
+
+```bash
+MCP_CPU_THRESHOLD=40   # more aggressive: kill anything over 40% CPU
+MCP_MONITOR_LOG=...    # custom log path
+```
 
 ## Install
 
