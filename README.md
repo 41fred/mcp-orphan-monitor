@@ -1,6 +1,6 @@
 # mcp-orphan-monitor
 
-Detect and kill orphaned MCP server processes that survive after AI coding tool sessions crash or close uncleanly.
+Detect and kill orphaned MCP servers and dev servers that survive after AI coding tool sessions crash or close uncleanly.
 
 If you use Claude Code, Cursor, or any MCP-based AI tool, you probably have zombie node processes running right now:
 
@@ -18,19 +18,32 @@ This is a [known Claude Code issue](https://github.com/anthropics/claude-code/is
 
 ## How it works
 
-A small bash script that runs every 10 minutes via macOS LaunchAgent. It finds all
-node processes matching `mcp-server-*` or `mcp-remote`, then kills any that match **any**
-of these three signatures:
+A small bash script that runs every 10 minutes via macOS LaunchAgent. It scans two
+classes of process and applies deliberately different rules to each.
+
+**MCP class** — `mcp-server-*`, `mcp-remote`, `workspace-mcp`. Killed on **any** of
+three signatures:
 
 1. **Direct orphan** — the parent is PID 1 (reparented to launchd/init). The classic
    crash case: the session process vanished.
 2. **Wedged / spinning** — the server is pinning CPU above `MCP_CPU_THRESHOLD` (default
-   60%). A healthy MCP server sits near 0% when idle, so sustained high CPU means it's
-   stuck in a spin loop — the signature that cooks a laptop 24/7.
+   60%) *and* has been alive longer than `MCP_MIN_WEDGE_AGE` (default 300s). A healthy
+   MCP server sits near 0% when idle, so sustained high CPU means it's stuck in a spin
+   loop — the signature that cooks a laptop 24/7. The age floor keeps a server's noisy
+   startup burst from tripping the rule.
 3. **Second-level orphan** — the parent is an AI-tool session (`claude`/`cursor`/…) that
    is *itself* orphaned (that parent's PPID is 1). This catches abandoned-but-still-alive
    sessions that linger for days holding their MCP children — the case PPID==1 detection
    alone misses.
+
+**Dev-server class** — `astro dev`, Vite, `next dev`, `webpack serve`, `esbuild
+--service`, `npm run dev`, `npx … dev`. Killed on **signature 1 only**. Rules 2 and 3 do
+not apply: a dev server legitimately pins a core while compiling, and killing a build
+mid-flight would be destructive.
+
+A **safelist** protects processes that are *supposed* to run under launchd with PPID=1
+(long-running agents, this monitor's own status bar app). Edit `SAFELIST` in
+`monitor.sh` to add your own.
 
 Live sessions are safe: an active session's parent chain terminates at your shell or IDE,
 not at launchd, and a healthy idle MCP server stays well under the CPU threshold.
@@ -41,6 +54,7 @@ No dependencies. No background daemon. Just a periodic scan.
 
 ```bash
 MCP_CPU_THRESHOLD=40   # more aggressive: kill anything over 40% CPU
+MCP_MIN_WEDGE_AGE=60   # let the wedged rule fire on younger processes
 MCP_MONITOR_LOG=...    # custom log path
 ```
 
